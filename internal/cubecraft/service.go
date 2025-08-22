@@ -2,17 +2,16 @@ package cubecraft
 
 import (
 	"context"
+	"roadmapapi/internal/hive"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"roadmapapi/internal/hive"
 )
 
 var columnToStatus = map[string][]string{
 	"in-progress": {"In Progress"},
-	"coming-next": {"Testing", "Information"},
+	"coming-next": {"Testing"},
 	"released":    {"Released"},
 }
 
@@ -274,8 +273,10 @@ func mapStatusLabel(notionStatus string) string {
 		return "In Progress"
 	case "Released":
 		return "Released"
-	case "Testing", "Information":
+	case "Testing":
 		return "Coming Next..."
+	case "Information":
+		return "Information"
 	default:
 		return notionStatus
 	}
