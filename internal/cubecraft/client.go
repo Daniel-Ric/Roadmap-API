@@ -21,6 +21,43 @@ const (
 	defaultPageSize   = 10
 )
 
+var notionQueryPayload = []byte(`{
+  "source": {
+    "type": "collection",
+    "id": "d14e867c-526a-4627-ad4f-1f56fdee77d6",
+    "spaceId": "2a7d9973-2a91-430b-9d0f-520163f17777"
+  },
+  "collectionView": {
+    "id": "79bd3042-c1cf-42aa-9d4e-d81a3043c505",
+    "spaceId": "2a7d9973-2a91-430b-9d0f-520163f17777"
+  },
+  "loader": {
+    "reducers": {
+      "board_columns": {
+        "type": "groups",
+        "version": "v2",
+        "returnPinnedGroups": true,
+        "groupBy": { "sort": { "type": "manual" }, "type": "select", "property": "3E6J" },
+        "groupSortPreference": [
+          { "value": { "type": "select", "value": "Information" }, "hidden": false, "property": "3E6J" },
+          { "value": { "type": "select", "value": "In Progress" }, "hidden": false, "property": "3E6J" },
+          { "value": { "type": "select", "value": "Testing" }, "hidden": false, "property": "3E6J" },
+          { "value": { "type": "select", "value": "Released" }, "hidden": false, "property": "3E6J" },
+          { "value": { "type": "select", "value": "Scrapped" }, "hidden": true,  "property": "3E6J" },
+          { "value": { "type": "select", "value": "BLOCKED" },  "hidden": true,  "property": "3E6J" },
+          { "value": { "type": "select" }, "hidden": true, "property": "3E6J" }
+        ],
+        "limit": 50,
+        "aggregation": { "type": "independent", "groupAggregation": { "aggregator": "count" } },
+        "blockResults": { "type": "independent", "defaultLimit": 200, "loadContentCover": false, "groupOverrides": {} }
+      }
+    },
+    "sort": [ { "property": "?igY", "direction": "descending" } ],
+    "searchQuery": "",
+    "userTimeZone": "Europe/Berlin"
+  }
+}`)
+
 type ClientOption func(*Client)
 
 func WithCacheTTL(ttl time.Duration) ClientOption {
@@ -61,44 +98,7 @@ func (c *Client) Fetch(ctx context.Context) ([]Card, error) {
 		c.mu.RUnlock()
 	}
 
-	body := []byte(`{
-  "source": {
-    "type": "collection",
-    "id": "d14e867c-526a-4627-ad4f-1f56fdee77d6",
-    "spaceId": "2a7d9973-2a91-430b-9d0f-520163f17777"
-  },
-  "collectionView": {
-    "id": "79bd3042-c1cf-42aa-9d4e-d81a3043c505",
-    "spaceId": "2a7d9973-2a91-430b-9d0f-520163f17777"
-  },
-  "loader": {
-    "reducers": {
-      "board_columns": {
-        "type": "groups",
-        "version": "v2",
-        "returnPinnedGroups": true,
-        "groupBy": { "sort": { "type": "manual" }, "type": "select", "property": "3E6J" },
-        "groupSortPreference": [
-          { "value": { "type": "select", "value": "Information" }, "hidden": false, "property": "3E6J" },
-          { "value": { "type": "select", "value": "In Progress" }, "hidden": false, "property": "3E6J" },
-          { "value": { "type": "select", "value": "Testing" }, "hidden": false, "property": "3E6J" },
-          { "value": { "type": "select", "value": "Released" }, "hidden": false, "property": "3E6J" },
-          { "value": { "type": "select", "value": "Scrapped" }, "hidden": true,  "property": "3E6J" },
-          { "value": { "type": "select", "value": "BLOCKED" },  "hidden": true,  "property": "3E6J" },
-          { "value": { "type": "select" }, "hidden": true, "property": "3E6J" }
-        ],
-        "limit": 50,
-        "aggregation": { "type": "independent", "groupAggregation": { "aggregator": "count" } },
-        "blockResults": { "type": "independent", "defaultLimit": 200, "loadContentCover": false, "groupOverrides": {} }
-      }
-    },
-    "sort": [ { "property": "?igY", "direction": "descending" } ],
-    "searchQuery": "",
-    "userTimeZone": "Europe/Berlin"
-  }
-}`)
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, notionAPIURL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, notionAPIURL, bytes.NewReader(notionQueryPayload))
 	if err != nil {
 		return nil, err
 	}
@@ -206,6 +206,60 @@ func (c *Client) Fetch(ctx context.Context) ([]Card, error) {
 		c.mu.Unlock()
 	}
 	return cards, nil
+}
+
+func (c *Client) Probe(ctx context.Context) (int, int, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, notionAPIURL, bytes.NewReader(notionQueryPayload))
+	if err != nil {
+		return 0, 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Cookie", os.Getenv("NOTION_COOKIE"))
+	req.Header.Set("x-notion-space-id", "2a7d9973-2a91-430b-9d0f-520163f17777")
+	req.Header.Set("x-notion-active-user-header", "")
+	req.Header.Set("notion-client-version", "23.13.0.4147")
+	req.Header.Set("notion-audit-log-platform", "web")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer resp.Body.Close()
+
+	status := resp.StatusCode
+	b, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	if err != nil {
+		return status, 0, err
+	}
+
+	var full struct {
+		RecordMap struct {
+			Block map[string]json.RawMessage `json:"block"`
+		} `json:"recordMap"`
+	}
+	if err := json.Unmarshal(b, &full); err != nil {
+		return status, 0, err
+	}
+
+	type rawBlock struct {
+		Value struct {
+			ParentTable string `json:"parent_table"`
+		} `json:"value"`
+	}
+	count := 0
+	for _, raw := range full.RecordMap.Block {
+		var rb rawBlock
+		if err := json.Unmarshal(raw, &rb); err != nil {
+			continue
+		}
+		if rb.Value.ParentTable == "collection" {
+			count++
+		}
+	}
+	if status >= 400 {
+		return status, count, fmt.Errorf("notion status %d", status)
+	}
+	return status, count, nil
 }
 
 var keyMap = map[string]string{

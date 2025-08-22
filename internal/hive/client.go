@@ -292,3 +292,45 @@ func ValidateColumn(col string) error {
 	}
 	return nil
 }
+
+func (c *Client) Probe(ctx context.Context) (int, int, error) {
+	total := 0
+	for col := range columnToStatusID {
+		q := Query{
+			Column:        col,
+			Page:          1,
+			SortBy:        "upvotes:desc",
+			InReview:      false,
+			IncludePinned: true,
+			BypassCache:   true,
+		}
+		u, err := c.buildURL(q)
+		if err != nil {
+			return 0, total, err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return 0, total, err
+		}
+		req.Header.Set("Accept", "application/json")
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return 0, total, err
+		}
+		status := resp.StatusCode
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+		resp.Body.Close()
+		if err != nil {
+			return status, total, err
+		}
+		if status >= 400 {
+			return status, total, fmt.Errorf("hive status %d", status)
+		}
+		var hr hiveResponse
+		if err := json.Unmarshal(body, &hr); err != nil {
+			return status, total, err
+		}
+		total += hr.TotalResults
+	}
+	return 200, total, nil
+}

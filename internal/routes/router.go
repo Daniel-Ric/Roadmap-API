@@ -1,6 +1,8 @@
 package routes
 
 import (
+	"context"
+	"encoding/json"
 	"log"
 	"net/http"
 	"time"
@@ -20,11 +22,6 @@ func NewRouter() http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(30 * time.Second))
 
-	r.Get("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	})
-
 	hiveClient := hive.NewClient(
 		hive.DefaultBaseURL,
 		&http.Client{Timeout: 12 * time.Second},
@@ -32,16 +29,71 @@ func NewRouter() http.Handler {
 		hive.WithMaxConcurrency(4),
 	)
 	h := hive.NewHandlers(hive.NewService(hiveClient))
+
+	ccClient := cubecraft.NewClient(
+		cubecraft.WithCacheTTL(2 * time.Minute),
+	)
+	cc := cubecraft.NewHandlers(cubecraft.NewService(ccClient))
+
+	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
+		type serviceHealth struct {
+			OK        bool   `json:"ok"`
+			Status    int    `json:"status"`
+			LatencyMs int64  `json:"latencyMs"`
+			Items     int    `json:"items"`
+			Error     string `json:"error,omitempty"`
+		}
+		ctx, cancel := context.WithTimeout(req.Context(), 10*time.Second)
+		defer cancel()
+
+		hiveStart := time.Now()
+		hiveStatus, hiveItems, hiveErr := hiveClient.Probe(ctx)
+		hiveRes := serviceHealth{
+			OK:        hiveErr == nil && hiveStatus >= 200 && hiveStatus < 300,
+			Status:    hiveStatus,
+			LatencyMs: time.Since(hiveStart).Milliseconds(),
+			Items:     hiveItems,
+		}
+		if hiveErr != nil {
+			hiveRes.Error = hiveErr.Error()
+		}
+
+		notionStart := time.Now()
+		notionStatus, notionItems, notionErr := ccClient.Probe(ctx)
+		notionRes := serviceHealth{
+			OK:        notionErr == nil && notionStatus >= 200 && notionStatus < 300,
+			Status:    notionStatus,
+			LatencyMs: time.Since(notionStart).Milliseconds(),
+			Items:     notionItems,
+		}
+		if notionErr != nil {
+			notionRes.Error = notionErr.Error()
+		}
+
+		ok := hiveRes.OK && notionRes.OK
+		resp := map[string]any{
+			"ok":        ok,
+			"timestamp": time.Now().Format(time.RFC3339),
+			"services": map[string]serviceHealth{
+				"hive":      hiveRes,
+				"cubecraft": notionRes,
+			},
+		}
+		code := http.StatusOK
+		if !ok {
+			code = http.StatusServiceUnavailable
+		}
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(code)
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
 	r.Route("/hive", func(r chi.Router) {
 		r.Get("/columns", h.Columns)
 		r.Get("/{column}", h.ByColumn)
 		r.Get("/updates", h.Updates)
 	})
 
-	ccClient := cubecraft.NewClient(
-		cubecraft.WithCacheTTL(2 * time.Minute),
-	)
-	cc := cubecraft.NewHandlers(cubecraft.NewService(ccClient))
 	r.Route("/cubecraft", func(r chi.Router) {
 		r.Get("/columns", cc.Columns)
 		r.Get("/{column}", cc.ByColumn)
