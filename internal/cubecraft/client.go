@@ -47,9 +47,9 @@ var notionQueryPayload = []byte(`{
           { "value": { "type": "select", "value": "BLOCKED" },  "hidden": true,  "property": "3E6J" },
           { "value": { "type": "select" }, "hidden": true, "property": "3E6J" }
         ],
-        "limit": 50,
+        "limit": 10,
         "aggregation": { "type": "independent", "groupAggregation": { "aggregator": "count" } },
-        "blockResults": { "type": "independent", "defaultLimit": 200, "loadContentCover": false, "groupOverrides": {} }
+        "blockResults": { "type": "independent", "defaultLimit": 50, "loadContentCover": false, "groupOverrides": {} }
       }
     },
     "sort": [ { "property": "?igY", "direction": "descending" } ],
@@ -106,7 +106,7 @@ func (c *Client) Fetch(ctx context.Context) ([]Card, error) {
 	req.Header.Set("Cookie", os.Getenv("NOTION_COOKIE"))
 	req.Header.Set("x-notion-space-id", "2a7d9973-2a91-430b-9d0f-520163f17777")
 	req.Header.Set("x-notion-active-user-header", "")
-	req.Header.Set("notion-client-version", "23.13.0.4147")
+	req.Header.Set("notion-client-version", "23.13.0.5155")
 	req.Header.Set("notion-audit-log-platform", "web")
 
 	resp, err := c.httpClient.Do(req)
